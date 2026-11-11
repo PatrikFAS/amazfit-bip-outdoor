@@ -1,0 +1,7 @@
+.tools/
+.git-local/
+vendor/
+build/
+__pycache__/
+.codex-attachments/
+data/

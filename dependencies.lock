@@ -1,0 +1,10 @@
+# Public source snapshots inspected, 2026-11-07. Only libbip is needed to build.
+MNVolkov/libbip df2e0122fa7fd3954df818c63ab9a43f29fa0b1b
+ngxson/amazfit-bip-app-template bc1ab7b081d5f6b732c103adf46131d4abf507ed
+ngxson/hobby_amazfit_bip_bt_notes ecfda5485fb009317d816f0cb32ad21e0db43174
+amazfitbip/documentation 9c2497b3ced8301eac60567f80bcb3b48a21a5eb
+MNVolkov/navi_demo d908f9f9fdece9318cf4a769970d14ca6bdeb813
+ngxson/amazfit-bip-tools-ts a7c6631ad86bbfae4d8cc6342a9da4fba450939d
+ngxson/amazfit-bip-web 74ee2ba142f88d1a7d08babe61e8ff372b431661
+# Inspected only; Windows C++/CLI emulator, not a build dependency.
+freebip/BipEmulator b6ca4e44feaddd69d19ed6c0770bad14942dfd8f

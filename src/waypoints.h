@@ -11,6 +11,7 @@ typedef struct {
     uint8_t occupied_mask;
     uint8_t selected;
     nav_units_t units;
+    int16_t variation; /* Magnetic variation in degrees, east positive; 0 is Off. */
 } waypoints_t;
 
 void waypoints_init(waypoints_t *collection);

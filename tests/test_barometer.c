@@ -13,7 +13,7 @@ static barometer_state_t *active;
 static navi_struct_ sample;
 static Elf_proc_ proc;
 static unsigned char settings[32];
-static int settings_size, sensor_mode, update_enabled, exited;
+static int settings_size, sensor_mode, update_enabled, exited, keep_open_calls;
 static int fail_readback;
 static int max_text_y;
 #ifdef WATCH_PREVIEW
@@ -34,6 +34,7 @@ void show_watchface(void) {}
 void switch_gps_pressure_sensors(int m) { sensor_mode = m; }
 void get_navi_data(navi_struct_ *d) { *d = sample; }
 void set_update_period(int e, int p) { (void)p; update_enabled = e; }
+int set_display_state_value(int item, int value) { assert((item == 8 || item == 2) && value == 1); ++keep_open_calls; return 0; }
 void set_bg_color(int c) { (void)c; } void fill_screen_bg(void) {} void set_graph_callback_to_ram_1(void) {} void load_font(void) {} void set_fg_color(int c) { (void)c; } void GUI_UC_SetEncodeUTF8(void) {}
 static void check_text(const char *s, int x, int y, int centered)
 {
@@ -66,7 +67,7 @@ int ElfWriteSettings(int i, const void *b, int o, int n) { (void)i; memcpy(setti
 static void reset(void)
 {
     memset(&sample, 0, sizeof(sample)); memset(settings, 0, sizeof(settings));
-    active = NULL; settings_size = 0; sensor_mode = -1; update_enabled = 0; exited = 0; fail_readback = 0; max_text_y = 0; overlay = 0; allocation_fails = 0;
+    active = NULL; settings_size = 0; sensor_mode = -1; update_enabled = 0; exited = 0; keep_open_calls = 0; fail_readback = 0; max_text_y = 0; overlay = 0; allocation_fails = 0;
 }
 
 static void test_pressure_and_reference(void)
@@ -91,6 +92,7 @@ static void test_settings_and_exit(void)
     memset(&loaded, 0, sizeof(loaded)); loaded.reference_hpa = REF_DEFAULT_HPA;
     assert(!load_reference(&loaded) && loaded.reference_hpa == REF_DEFAULT_HPA);
     active = calloc(1, sizeof(*active)); active->reference_hpa = REF_DEFAULT_HPA; active->sensor_on = 1;
+    sensor_mode = SENSOR_ENABLE; update_enabled = 1;
     gesture.gesture = GESTURE_CLICK; gesture.touch_pos_x = 150; gesture.touch_pos_y = 150;
     dispatch_screen(&gesture);
     assert(active->reference_hpa == REF_DEFAULT_HPA + 1.0f && settings_size == SETTINGS_SIZE);
@@ -110,7 +112,9 @@ static void test_settings_and_exit(void)
     assert(load_reference(&loaded) && loaded.reference_hpa == REF_DEFAULT_HPA);
     draw_screen(active); assert(max_text_y <= 158);
     gesture.gesture = GESTURE_SWIPE_RIGHT; dispatch_screen(&gesture);
-    assert(sensor_mode == SENSOR_DISABLE && !update_enabled && exited == 1);
+    assert(sensor_mode == SENSOR_ENABLE && active->sensor_on && update_enabled && exited == 0);
+    key_press_screen();
+    assert(sensor_mode == SENSOR_DISABLE && !active->sensor_on && !update_enabled && exited == 1);
     free(active); active = NULL;
 }
 
@@ -122,15 +126,20 @@ static void test_overlay_and_allocation_failure(void)
     assert(active == NULL);
     allocation_fails = 0;
     show_screen(NULL);
-    assert(active != NULL && active->sensor_on && sensor_mode == SENSOR_ENABLE);
+    assert(active != NULL && active->sensor_on && sensor_mode == SENSOR_ENABLE && keep_open_calls == 2);
+    screen_job();
+    assert(!active->pressure_ready && keep_open_calls == 4);
+    sample.ready = PRESS_READY; sample.pressure = 101325;
+    screen_job();
+    assert(active->pressure_ready && keep_open_calls == 6);
     {
         barometer_state_t *retained = active;
         overlay = 1;
         show_screen(retained);
-        assert(active == retained && active->sensor_on);
+        assert(active == retained && active->sensor_on && keep_open_calls == 8);
     }
     exit_app(active);
-    assert(sensor_mode == SENSOR_DISABLE);
+    assert(sensor_mode == SENSOR_DISABLE && keep_open_calls == 8);
     free(active); active = NULL;
 }
 

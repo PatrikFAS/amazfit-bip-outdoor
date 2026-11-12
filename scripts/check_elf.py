@@ -50,7 +50,7 @@ for name in ('hello', 'gps_diagnostic', 'waypoint_navigator', 'tides_sun', 'baro
     loaded_bytes = sum(size for _, size in loads)
     # Engineering budget prompted by real -9 failure, not a heap guarantee.
     # The watch showed 30,696 bytes free; allow margin for loader/app overhead.
-    if name in ('waypoint_navigator', 'tides_sun', 'barometer', 'compass_diagnostic'):
+    if name != 'hello':
         assert len(data) <= 16 * 1024, f'App ELF exceeds 16 KiB budget: {len(data)}'
         assert loaded_bytes <= 13 * 1024, f'App load exceeds 13 KiB budget: {loaded_bytes}'
         assert len(data) + loaded_bytes <= 28 * 1024, 'App file + load budget exceeds 28 KiB'

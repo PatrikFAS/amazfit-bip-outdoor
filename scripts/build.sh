@@ -18,6 +18,7 @@ flags=(-std=c99 -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -mlit
 for app in hello gps_diagnostic waypoint_navigator tides_sun barometer compass_diagnostic; do
     sources=("build/$app.o")
     link_flags=()
+    libc=-lc
     if [[ "$app" == hello ]]; then
         "$cc" "${flags[@]}" -c src/hello.c -o "${sources[0]}"
     elif [[ "$app" == tides_sun ]]; then
@@ -31,7 +32,9 @@ for app in hello gps_diagnostic waypoint_navigator tides_sun barometer compass_d
         "$cc" "${flags[@]}" -flto -DDIAGNOSTIC=0 -c src/watch_app.c -o "${sources[0]}"
         "$cc" "${flags[@]}" -DDIAGNOSTIC=0 -c src/watch_app.c -o build/waypoint_navigator.imports.o
         sources+=(build/nav.lto.o build/waypoints.o)
-        link_flags=(-flto)
+        link_flags=(-flto -Wl,--version-script=scripts/navigator-symbols.ld)
+        # Navigator only needs the smaller memory routines from newlib-nano.
+        libc=-lc_nano
     else
         mode=0; [[ "$app" != gps_diagnostic ]] || mode=1
         "$cc" "${flags[@]}" -DDIAGNOSTIC="$mode" -c src/watch_app.c -o "${sources[0]}"
@@ -40,8 +43,10 @@ for app in hello gps_diagnostic waypoint_navigator tides_sun barometer compass_d
     # Preserve upstream GNU ld PIE layout and libbip _start import trampoline.
     "$cc" "${link_flags[@]}" -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -nostdlib \
         -Wl,-EL,-N,-pie,--no-dynamic-linker,--gc-sections,--cref,-e,_start,-Map,"build/$app.map" \
-        -o "build/$app.elf" "${sources[@]}" vendor/libbip/lib/libbip.a -lm -lc -lgcc
+        -o "build/$app.elf" "${sources[@]}" vendor/libbip/lib/libbip.a -lm "$libc" -lgcc
     label="$app"
+    [[ "$app" != gps_diagnostic ]] || label='Diagnostics'
+    [[ "$app" != waypoint_navigator ]] || label='Navigator'
     [[ "$app" != tides_sun ]] || label='Tides & Sun'
     [[ "$app" != barometer ]] || label='Barometer'
     [[ "$app" != compass_diagnostic ]] || label='Compass Check'
@@ -55,9 +60,12 @@ for app in hello gps_diagnostic waypoint_navigator tides_sun barometer compass_d
         python3 -c 'from pathlib import Path; Path("build/barometer.settings").write_bytes(bytes(10))'
         "${prefix}objcopy" --add-section .elf.settings=build/barometer.settings "build/$app.elf"
     fi
-    if [[ "$app" == waypoint_navigator || "$app" == tides_sun || "$app" == barometer || "$app" == compass_diagnostic ]]; then
+    if [[ "$app" != hello ]]; then
         cp "build/$app.elf" "build/$app.untrimmed.elf"
-        "${prefix}objcopy" --strip-debug --discard-all "build/$app.elf"
+        trim_flags=(--strip-debug --discard-all)
+        # Navigator also drops the non-loaded compiler identification strings.
+        [[ "$app" != waypoint_navigator ]] || trim_flags+=(--remove-section .comment)
+        "${prefix}objcopy" "${trim_flags[@]}" "build/$app.elf"
         ARM_PREFIX="$prefix" python3 scripts/check-elf-trim.py "build/$app.untrimmed.elf" "build/$app.elf"
     fi
     "${prefix}size" "build/$app.elf"

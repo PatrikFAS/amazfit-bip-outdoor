@@ -1,4 +1,5 @@
 #include <libbip.h>
+#include "bip_display.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -73,6 +74,7 @@ static void show_screen(void *param)
         switch_gps_pressure_sensors(SENSOR_ENABLE);
         state->sensor_on = 1;
     }
+    bip_keep_screen_open();
     poll_pressure(state);
     draw_screen(state);
     set_update_period(1, UPDATE_MS);
@@ -97,6 +99,7 @@ static void screen_job(void)
 {
     barometer_state_t **slot = (barometer_state_t **)get_ptr_temp_buf_2();
     if (!slot || !*slot) return;
+    if ((*slot)->sensor_on) bip_keep_screen_open();
     poll_pressure(*slot);
     draw_screen(*slot);
     repaint_screen_lines(0, VIDEO_Y);
@@ -109,9 +112,7 @@ static int dispatch_screen(void *param)
     barometer_state_t *state;
     struct gesture_ *gesture = (struct gesture_ *)param;
     if (!slot || !(state = *slot) || !gesture) return 0;
-    if (gesture->gesture == GESTURE_SWIPE_RIGHT) {
-        exit_app(state);
-    } else if (gesture->gesture == GESTURE_CLICK) {
+    if (gesture->gesture == GESTURE_CLICK) {
         if (gesture->touch_pos_y >= 144 && gesture->touch_pos_y <= 172) {
             float previous = state->reference_hpa;
             if (gesture->touch_pos_x < 88 && state->reference_hpa > REF_MIN_HPA) {

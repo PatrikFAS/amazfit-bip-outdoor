@@ -16,5 +16,6 @@ void *_memclr(void *, size_t); int _memcmp(const void *, const void *, size_t); 
 void *pvPortMalloc(size_t); void *get_ptr_temp_buf_2(void); int get_var_menu_overlay(void); void reg_menu(void *, int);
 Elf_proc_ *get_proc_by_addr(void *); void show_watchface(void); void switch_gps_pressure_sensors(int); void get_navi_data(navi_struct_ *);
 void set_update_period(int, int); void set_bg_color(int); void fill_screen_bg(void); void set_graph_callback_to_ram_1(void); void load_font(void); void set_fg_color(int); void GUI_UC_SetEncodeUTF8(void); void text_out_center(const char *, int, int); void text_out(const char *, int, int); void repaint_screen_lines(int, int); int show_menu_animate(void *, int, int);
+int set_display_state_value(int, int);
 int ElfGetSettingsSize(int); int ElfReadSettings(int, void *, int, int); int ElfWriteSettings(int, const void *, int, int);
 #endif

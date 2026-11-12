@@ -9,10 +9,18 @@
 #define NAV_EARTH_RADIUS_M 6371008.8
 #define NAV_METRES_PER_NAUTICAL_MILE 1852.0
 
-int nav_coordinate_valid(nav_coordinate_t c)
+/* Share the coordinate checks and codecs across call sites in the ARM ELF.
+ * Inlining them during LTO duplicates the double-precision setup and checks. */
+#if defined(NAV_SMALL_MATH) && defined(__arm__) && defined(__GNUC__)
+#define NAV_COORDINATE_NOINLINE __attribute__((noinline))
+#else
+#define NAV_COORDINATE_NOINLINE
+#endif
+
+NAV_COORDINATE_NOINLINE int nav_coordinate_valid(nav_coordinate_t c)
 {
-    return isfinite(c.latitude_deg) && isfinite(c.longitude_deg) &&
-           c.latitude_deg >= -90.0 && c.latitude_deg <= 90.0 &&
+    /* Ordered range checks reject NaN and infinity as well. */
+    return c.latitude_deg >= -90.0 && c.latitude_deg <= 90.0 &&
            c.longitude_deg >= -180.0 && c.longitude_deg <= 180.0;
 }
 
@@ -40,29 +48,33 @@ int nav_distance_bearing(nav_coordinate_t from, nav_coordinate_t to,
     if (longitude_delta > 180.0) longitude_delta -= 360.0;
     else if (longitude_delta < -180.0) longitude_delta += 360.0;
     dlon = (float)longitude_delta * radians_per_degree;
-    a = nav_sin_bounded(dlat * 0.5f) * nav_sin_bounded(dlat * 0.5f) +
-        nav_cos_bounded(lat1) * nav_cos_bounded(lat2) * nav_sin_bounded(dlon * 0.5f) * nav_sin_bounded(dlon * 0.5f);
+    float sin_half_lat = nav_sin_bounded(dlat * 0.5f);
+    float sin_half_lon = nav_sin_bounded(dlon * 0.5f);
+    const float half_pi = 1.57079632679489661923f;
+    float cos_lat2 = nav_sin_bounded(half_pi - fabsf(lat2));
+    float cos_product = nav_sin_bounded(half_pi - fabsf(lat1)) * cos_lat2;
+    a = sin_half_lat * sin_half_lat + cos_product * sin_half_lon * sin_half_lon;
     if (a < 0.0f) a = 0.0f;
     if (a > 1.0f) a = 1.0f;
     if (a > 0.9f) {
         /* Near antipodes, 1-a loses precision; calculate the small complement. */
         float anti_dlat = (float)(to.latitude_deg + from.latitude_deg) * radians_per_degree;
         float anti_dlon = 3.14159265358979323846f - fabsf(dlon);
-        float anti_a = nav_sin_bounded(anti_dlat * 0.5f) * nav_sin_bounded(anti_dlat * 0.5f) +
-            nav_cos_bounded(lat1) * nav_cos_bounded(lat2) * nav_sin_bounded(anti_dlon * 0.5f) * nav_sin_bounded(anti_dlon * 0.5f);
+        float sin_anti_lat = nav_sin_bounded(anti_dlat * 0.5f);
+        float sin_anti_lon = nav_sin_bounded(anti_dlon * 0.5f);
+        float anti_a = sin_anti_lat * sin_anti_lat + cos_product * sin_anti_lon * sin_anti_lon;
         if (anti_a < 0.0f) anti_a = 0.0f;
         if (anti_a > 1.0f) anti_a = 1.0f;
-        c = 2.0f * atan2f(sqrtf(anti_a), sqrtf(1.0f - anti_a));
+        c = 2.0f * nav_atan2_bounded(sqrtf(anti_a), sqrtf(1.0f - anti_a));
         central_angle = NAV_PI - (double)c;
     } else {
-        c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
+        c = 2.0f * nav_atan2_bounded(sqrtf(a), sqrtf(1.0f - a));
         central_angle = (double)c;
     }
-    y = nav_sin_bounded(dlon) * nav_cos_bounded(lat2);
+    y = nav_sin_bounded(dlon) * cos_lat2;
     /* Stable local-bearings identity avoids subtracting nearly equal terms. */
-    x = nav_sin_bounded(dlat) + 2.0f * nav_sin_bounded(lat1) * nav_cos_bounded(lat2) *
-        nav_sin_bounded(dlon * 0.5f) * nav_sin_bounded(dlon * 0.5f);
-    bearing = atan2f(y, x) * (180.0f / 3.14159265358979323846f);
+    x = nav_sin_bounded(dlat) + 2.0f * nav_sin_bounded(lat1) * cos_lat2 * sin_half_lon * sin_half_lon;
+    bearing = nav_atan2_bounded(y, x) * (180.0f / 3.14159265358979323846f);
     if (bearing < 0.0f) bearing += 360.0f;
     if (bearing >= 360.0f) bearing -= 360.0f;
     *distance_metres = NAV_EARTH_RADIUS_M * central_angle;
@@ -153,7 +165,7 @@ static uint32_t get_u32le(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-int nav_waypoint_encode(nav_coordinate_t c, uint8_t out[NAV_WAYPOINT_RECORD_SIZE])
+NAV_COORDINATE_NOINLINE int nav_waypoint_encode(nav_coordinate_t c, uint8_t out[NAV_WAYPOINT_RECORD_SIZE])
 {
     int32_t lat, lon;
     if (out == NULL || !nav_coordinate_valid(c)) return 0;
@@ -169,7 +181,7 @@ int nav_waypoint_encode(nav_coordinate_t c, uint8_t out[NAV_WAYPOINT_RECORD_SIZE
     return 1;
 }
 
-int nav_waypoint_decode(const uint8_t *record, size_t length, nav_coordinate_t *c)
+NAV_COORDINATE_NOINLINE int nav_waypoint_decode(const uint8_t *record, size_t length, nav_coordinate_t *c)
 {
     uint32_t raw_lat, raw_lon;
     int32_t lat, lon;

@@ -89,6 +89,8 @@ static void test_lifecycle_overlay_and_exit(void)
     overlay = 1; show_screen(active);
     assert(active && enable_calls == 1 && resume_calls == 1);
     dispatch_screen(&g);
+    assert(enabled && active->sensor_on && update_enabled && disable_calls == 0 && exited == 0);
+    key_press_screen();
     assert(!enabled && disable_calls == 1 && !update_enabled && exited == 1);
     free(active); active = NULL;
 }

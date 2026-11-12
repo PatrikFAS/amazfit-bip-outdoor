@@ -37,8 +37,7 @@ static void hello_screen(void *param)
 
 static int hello_dispatch(void *param)
 {
-    struct gesture_ *gesture = (struct gesture_ *)param;
-    if (gesture && gesture->gesture == GESTURE_SWIPE_RIGHT) hello_exit();
+    (void)param;
     return 0;
 }
 

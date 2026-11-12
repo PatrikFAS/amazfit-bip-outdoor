@@ -1,18 +1,21 @@
 #include <libbip.h>
+#include "bip_display.h"
 #include "outdoor_data.h"
 #include "tides_config.h"
 #include <stdint.h>
 
-#define PAGE_SUN 0
-#define PAGE_TIDES 1
-#define PAGE_INFO 2
-#define PAGE_TWILIGHT 3
-#define UPDATE_MS 30000
+enum { PAGE_TIDES, PAGE_SUN, PAGE_TWILIGHT, PAGE_INFO, PAGE_COUNT, PAGE_TIDE_LIST = PAGE_COUNT };
+#define UPDATE_MS 2000
+#define DATA_REFRESH_TICKS (30000 / UPDATE_MS)
+#define TIDES_PER_PAGE 3u
 
 typedef struct {
     void *ret_f;
     Elf_proc_ *proc;
     int page;
+    unsigned char refresh_ticks;
+    unsigned char list_page;
+    unsigned char last_list_page;
     outdoor_tide_info_t tide_info;
     outdoor_tide_event_t tide_events[OUTDOOR_TIDE_MAX_EVENTS];
     outdoor_tide_status_t tide_status;
@@ -66,6 +69,7 @@ static void show_screen(void *param)
         state->have_tide = state->tide_status == OUTDOOR_TIDE_OK;
 #endif
     }
+    bip_keep_screen_open();
     draw_screen(state);
     set_update_period(1, UPDATE_MS);
 }
@@ -74,6 +78,12 @@ static void screen_job(void)
 {
     tides_sun_state_t **slot = (tides_sun_state_t **)get_ptr_temp_buf_2();
     if (!slot || !*slot) return;
+    bip_keep_screen_open();
+    if (++(*slot)->refresh_ticks < DATA_REFRESH_TICKS) {
+        set_update_period(1, UPDATE_MS);
+        return;
+    }
+    (*slot)->refresh_ticks = 0;
 #if TIDES_CONFIG_DATA_SIZE > 0
     (*slot)->tide_status = outdoor_tide_decode(tides_config_data,
         TIDES_CONFIG_DATA_SIZE, current_utc_seconds(),
@@ -91,17 +101,37 @@ static int dispatch_screen(void *param)
     tides_sun_state_t *state;
     struct gesture_ *gesture = (struct gesture_ *)param;
     if (!slot || !(state = *slot) || !gesture) return 0;
-    if (gesture->gesture == GESTURE_SWIPE_RIGHT) exit_app(state);
-    else if (gesture->gesture == GESTURE_SWIPE_LEFT ||
-             gesture->gesture == GESTURE_SWIPE_UP) {
-        state->page = (state->page + 1) % 4;
-        draw_screen(state);
-        repaint_screen_lines(0, VIDEO_Y);
-    } else if (gesture->gesture == GESTURE_CLICK) {
-        state->page = (state->page + 1) % 4;
-        draw_screen(state);
-        repaint_screen_lines(0, VIDEO_Y);
-    }
+    int tap = gesture->gesture == GESTURE_CLICK;
+    int next = gesture->gesture == GESTURE_SWIPE_LEFT || gesture->gesture == GESTURE_SWIPE_UP;
+    int back = gesture->gesture == GESTURE_SWIPE_RIGHT;
+    int x = gesture->touch_pos_x;
+    int footer = tap && (unsigned)x < 176u &&
+                 gesture->touch_pos_y >= 144 && gesture->touch_pos_y < VIDEO_Y;
+    if (state->page == PAGE_TIDE_LIST) {
+        unsigned last_page = state->last_list_page;
+        if (footer && x >= 58 && x < 118) state->page = PAGE_TIDES;
+        else if (back) {
+            if (state->list_page) --state->list_page;
+            else state->page = PAGE_TIDES;
+        }
+        else if ((next || (footer && x >= 118)) && state->list_page < last_page)
+            ++state->list_page;
+        else if (footer && x < 58 && state->list_page) --state->list_page;
+        else return 0;
+    } else if (back) {
+        if (state->page > PAGE_TIDES) --state->page;
+        else return 0;
+    } else if (state->page == PAGE_TIDES && footer && x < 88) {
+        state->page = PAGE_TIDE_LIST;
+        state->list_page = 0;
+    } else if (next || (tap && state->page != PAGE_INFO)) {
+        if (state->page < PAGE_INFO) ++state->page;
+        else return 0;
+    } else if (state->page == PAGE_INFO && footer && tap) {
+        --state->page;
+    } else return 0;
+    draw_screen(state);
+    repaint_screen_lines(0, VIDEO_Y);
     return 0;
 }
 
@@ -139,13 +169,6 @@ static void epoch_local(uint32_t utc, int offset, outdoor_date_t *date, int *min
     *minute = (int)(sod / 60);
 }
 
-static void format_height(char *line, int16_t height_cm)
-{
-    int magnitude = height_cm < 0 ? -(int)height_cm : (int)height_cm;
-    _sprintf(line, "HEIGHT %s%ld.%02ldM", height_cm < 0 ? "-" : "",
-             (long)(magnitude / 100), (long)(magnitude % 100));
-}
-
 static int64_t civil_days(outdoor_date_t date)
 {
     int64_t y = date.year, m = date.month, d = date.day;
@@ -176,170 +199,219 @@ static uint32_t current_utc_seconds(void)
     return (uint32_t)seconds;
 }
 
-static void draw_header(int page)
+static void draw_rule(int y)
 {
-    text_out(page == PAGE_SUN ? "SUN" : page == PAGE_TWILIGHT ? "TWILIGHT" :
-             page == PAGE_TIDES ? "TIDES" : "INFO", 8, 3);
-    text_out("POINT ATK UTC-07", 8, 22);
+    set_fg_color(COLOR_AQUA);
+    draw_filled_rect(8, y, 167, y);
 }
 
-static void draw_sun(void)
+static void draw_notice(const char *message, int color)
+{
+    set_fg_color(color);
+    text_out_center(message, 88, 76);
+}
+
+static void draw_time(int minute, int x, int y, int color)
+{
+    char line[12];
+    if (minute < 0) {
+        set_fg_color(COLOR_YELLOW);
+        text_out("--:--", x, y);
+        return;
+    }
+    _sprintf(line, "%02d:%02d", minute / 60, minute % 60);
+    set_fg_color(color);
+    text_out(line, x, y);
+}
+
+static void draw_sun_row(const char *label, int minute, int y, int color)
+{
+    set_fg_color(COLOR_AQUA);
+    text_out(label, 8, y);
+    draw_time(minute, 112, y, color);
+}
+
+static void draw_twilight_row(const char *label, int dawn, int dusk, int y)
+{
+    set_fg_color(COLOR_AQUA);
+    text_out(label, 8, y);
+    draw_time(dawn, 64, y, COLOR_WHITE);
+    draw_time(dusk, 120, y, COLOR_WHITE);
+}
+
+static void draw_solar(int page)
 {
     struct datetime_ dt;
-    outdoor_date_t date;
     outdoor_solar_t sun;
-    char line[28];
     _memclr(&dt, sizeof(dt));
     get_current_date_time(&dt);
-    date.year = dt.year; date.month = dt.month; date.day = dt.day;
+    outdoor_date_t date = { dt.year, dt.month, dt.day };
     if (!outdoor_date_valid(date) || !current_utc_seconds()) {
-        text_out("CLOCK UNAVAILABLE", 8, 50); return;
+        draw_notice("CLOCK UNAVAILABLE", COLOR_RED);
+        return;
     }
-    _sprintf(line, "%04d-%02d-%02d", date.year, date.month, date.day);
-    text_out(line, 8, 43);
-    _sprintf(line, "NOW %02d:%02d", (int)dt.hour, (int)dt.min);
-    text_out(line, 8, 62);
     if (outdoor_solar_calculate(date, TIDES_CONFIG_LATITUDE_DEG,
             TIDES_CONFIG_LONGITUDE_DEG, TIDES_CONFIG_UTC_OFFSET_MINUTES,
             &sun) != OUTDOOR_SOLAR_OK) {
-        text_out("SUNRISE/SET N/A", 8, 88);
-        text_out("NO RISE/SET TODAY", 8, 108);
+        draw_notice(page == PAGE_SUN ? "SUNRISE/SET N/A" : "TWILIGHT N/A", COLOR_YELLOW);
         return;
     }
-    _sprintf(line, "RISE %02d:%02d", sun.sunrise_minute/60, sun.sunrise_minute%60);
-    text_out(line, 8, 82);
-    _sprintf(line, "SET  %02d:%02d", sun.sunset_minute/60, sun.sunset_minute%60);
-    text_out(line, 8, 102);
-    {
-        int now = (int)dt.hour * 60 + dt.min;
-        if (now < sun.sunrise_minute) _sprintf(line, "BEFORE SUNRISE");
-        else if (now >= sun.sunset_minute) _sprintf(line, "AFTER SUNSET");
-        else {
-            int left = sun.sunset_minute - now;
-            _sprintf(line, "DAY LEFT %02d:%02d", left/60, left%60);
+    if (page == PAGE_TWILIGHT) {
+        set_fg_color(COLOR_AQUA);
+        text_out("DAWN", 64, 51);
+        text_out("DUSK", 120, 51);
+        draw_rule(72);
+        draw_twilight_row("CIVIL", sun.civil_dawn_minute, sun.civil_dusk_minute, 84);
+        draw_twilight_row("NAUT", sun.nautical_dawn_minute, sun.nautical_dusk_minute, 118);
+        return;
+    }
+    draw_sun_row("SUNRISE", sun.sunrise_minute, 51, COLOR_WHITE);
+    draw_sun_row("SUNSET", sun.sunset_minute, 74, COLOR_WHITE);
+    draw_rule(96);
+    draw_sun_row("DAYLIGHT", sun.sunset_minute - sun.sunrise_minute, 103, COLOR_WHITE);
+    int now = (int)dt.hour * 60 + dt.min;
+    if (now >= sun.sunrise_minute && now < sun.sunset_minute)
+        draw_sun_row("LEFT", sun.sunset_minute - now, 126, COLOR_GREEN);
+    else {
+        set_fg_color(COLOR_WHITE);
+        text_out_center(now < sun.sunrise_minute ? "BEFORE SUNRISE" : "AFTER SUNSET", 88, 126);
+    }
+}
+
+static void draw_tide_entry(const outdoor_tide_event_t *event, outdoor_tide_kind_t kind,
+                            int offset, int y)
+{
+    set_fg_color(COLOR_AQUA);
+    text_out(kind == OUTDOOR_TIDE_HIGH ? "HIGH" : "LOW", 8, y);
+    if (!event) {
+        draw_time(-1, 112, y, COLOR_GREEN);
+        return;
+    }
+
+    outdoor_date_t date;
+    int minute;
+    char line[16];
+    int height = event->height_cm;
+    int magnitude = height < 0 ? -height : height;
+    epoch_local(event->utc, offset, &date, &minute);
+    draw_time(minute, 112, y, COLOR_GREEN);
+    set_fg_color(COLOR_WHITE);
+    _sprintf(line, "%s%ld.%02ld m", height < 0 ? "-" : "",
+             (long)(magnitude / 100), (long)(magnitude % 100));
+    text_out(line, 8, y + 22);
+    _sprintf(line, "%02d/%02d", date.month, date.day);
+    text_out(line, 112, y + 22);
+}
+
+static int tide_data_available(const tides_sun_state_t *state, uint32_t now)
+{
+    if (!now) draw_notice("CLOCK UNAVAILABLE", COLOR_RED);
+    else if (state->tide_status == OUTDOOR_TIDE_EXPIRED ||
+             (state->have_tide && now > state->tide_info.expires_utc)) {
+        draw_notice("TIDES EXPIRED", COLOR_YELLOW);
+        text_out_center("UPDATE DATA", 88, 101);
+    } else if (state->tide_status == OUTDOOR_TIDE_INVALID) {
+        draw_notice("TIDE DATA INVALID", COLOR_RED);
+    } else if (!state->have_tide) {
+        draw_notice("NO TIDE DATA", COLOR_YELLOW);
+    } else return 1;
+    return 0;
+}
+
+static void draw_tides(const tides_sun_state_t *state)
+{
+    uint32_t now = current_utc_seconds();
+    if (!tide_data_available(state, now)) return;
+    outdoor_tide_event_t event;
+    int offset = state->tide_info.utc_offset_minutes;
+    int found = outdoor_tide_next(&state->tide_info, state->tide_events, now, OUTDOOR_TIDE_HIGH, &event);
+    draw_tide_entry(found ? &event : NULL, OUTDOOR_TIDE_HIGH, offset, 52);
+    draw_rule(97);
+    found = outdoor_tide_next(&state->tide_info, state->tide_events, now, OUTDOOR_TIDE_LOW, &event);
+    draw_tide_entry(found ? &event : NULL, OUTDOOR_TIDE_LOW, offset, 103);
+}
+
+static void draw_tide_list(tides_sun_state_t *state)
+{
+    uint32_t now = current_utc_seconds();
+    int previous = 0, next = 0;
+    state->last_list_page = 0;
+    if (tide_data_available(state, now)) {
+        unsigned first = 0, count = state->tide_info.event_count;
+        while (first < count && state->tide_events[first].utc < now) ++first;
+        if (first == count) {
+            draw_notice("NO UPCOMING TIDES", COLOR_YELLOW);
+        } else {
+            unsigned last_page = (count - first - 1) / TIDES_PER_PAGE;
+            state->last_list_page = (unsigned char)last_page;
+            if (state->list_page > last_page) state->list_page = (unsigned char)last_page;
+            previous = state->list_page > 0;
+            next = state->list_page < last_page;
+            unsigned i = first + state->list_page * TIDES_PER_PAGE;
+            int offset = state->tide_info.utc_offset_minutes;
+            for (unsigned row = 0; row < TIDES_PER_PAGE && i < count; ++row, ++i) {
+                const outdoor_tide_event_t *event = &state->tide_events[i];
+                int y = 31 + (int)row * 40;
+                if (row) draw_rule(y - 2);
+                draw_tide_entry(event, event->kind, offset, y);
+            }
         }
     }
-    text_out(line, 8, 122);
-    _sprintf(line, "DAYLENGTH %02d:%02d",
-             (sun.sunset_minute - sun.sunrise_minute)/60,
-             (sun.sunset_minute - sun.sunrise_minute)%60);
-    text_out(line, 8, 142);
+    if (!previous && !next) state->list_page = 0;
+    set_fg_color(COLOR_AQUA);
+    if (previous) text_out_center("PREV", 29, 154);
+    text_out_center("BACK", 88, 154);
+    if (next) text_out_center("NEXT", 147, 154);
 }
 
-static void draw_twilight(void)
+static void draw_info(const tides_sun_state_t *state)
 {
-    struct datetime_ dt;
-    outdoor_date_t date;
-    outdoor_solar_t sun;
     char line[24];
-    _memclr(&dt, sizeof(dt)); get_current_date_time(&dt);
-    date.year = dt.year; date.month = dt.month; date.day = dt.day;
-    if (!outdoor_date_valid(date) || !current_utc_seconds()) {
-        text_out("CLOCK UNAVAILABLE", 8, 62); return;
-    }
-    if (outdoor_solar_calculate(date, TIDES_CONFIG_LATITUDE_DEG,
-            TIDES_CONFIG_LONGITUDE_DEG, TIDES_CONFIG_UTC_OFFSET_MINUTES,
-            &sun) != OUTDOOR_SOLAR_OK) {
-        text_out("TWILIGHT N/A", 8, 62); return;
-    }
-    if (sun.civil_dawn_minute < 0) text_out("CIVIL AM --:--", 8, 66);
-    else { _sprintf(line, "CIVIL AM %02d:%02d", sun.civil_dawn_minute/60,
-                    sun.civil_dawn_minute%60); text_out(line, 8, 66); }
-    if (sun.civil_dusk_minute < 0) text_out("CIVIL PM --:--", 8, 86);
-    else { _sprintf(line, "CIVIL PM %02d:%02d", sun.civil_dusk_minute/60,
-                    sun.civil_dusk_minute%60); text_out(line, 8, 86); }
-    if (sun.nautical_dawn_minute < 0) text_out("NAUT AM --:--", 8, 106);
-    else { _sprintf(line, "NAUT AM %02d:%02d", sun.nautical_dawn_minute/60,
-                    sun.nautical_dawn_minute%60); text_out(line, 8, 106); }
-    if (sun.nautical_dusk_minute < 0) text_out("NAUT PM --:--", 8, 126);
-    else { _sprintf(line, "NAUT PM %02d:%02d", sun.nautical_dusk_minute/60,
-                    sun.nautical_dusk_minute%60); text_out(line, 8, 126); }
-}
-
-static void draw_tides(tides_sun_state_t *state)
-{
-    char line[40];
-    outdoor_tide_event_t next;
-    uint32_t now = current_utc_seconds();
-    if (!now) { text_out("CLOCK UNAVAILABLE", 8, 66); return; }
-    if (state->tide_status == OUTDOOR_TIDE_EXPIRED) {
-        text_out("TIDE DATA EXPIRED", 8, 66);
-        text_out("UPDATE REQUIRED", 8, 88);
-        return;
-    }
-    if (state->tide_status == OUTDOOR_TIDE_INVALID) {
-        text_out("TIDE DATA INVALID", 8, 66);
-        return;
-    }
-    if (!state->have_tide) {
-        text_out("NO TIDE DATA", 8, 66);
-        text_out("NO OFFLINE TABLE", 8, 88);
-        text_out("NO CURVE ESTIMATE", 8, 110);
-        return;
-    }
-    if (outdoor_tide_next(&state->tide_info, state->tide_events, now,
-                          OUTDOOR_TIDE_HIGH, &next)) {
-        outdoor_date_t d; int min;
-        epoch_local(next.utc, state->tide_info.utc_offset_minutes, &d, &min);
-        _sprintf(line, "HIGH %02d/%02d %02d:%02d", d.month, d.day, min/60, min%60);
-        text_out(line, 8, 66);
-        format_height(line, (int16_t)next.height_cm);
-        text_out(line, 8, 84);
-    } else text_out("NO NEXT HIGH", 8, 66);
-    if (outdoor_tide_next(&state->tide_info, state->tide_events, now,
-                          OUTDOOR_TIDE_LOW, &next)) {
-        outdoor_date_t d; int min;
-        epoch_local(next.utc, state->tide_info.utc_offset_minutes, &d, &min);
-        _sprintf(line, "LOW  %02d/%02d %02d:%02d", d.month, d.day, min/60, min%60);
-        text_out(line, 8, 104);
-        format_height(line, (int16_t)next.height_cm);
-        text_out(line, 8, 122);
-    } else text_out("NO NEXT LOW", 8, 104);
-    _sprintf(line, "STA %.14s", state->tide_info.station);
-    text_out(line, 8, 142);
-    _sprintf(line, "SRC %.14s", state->tide_info.source);
-    text_out(line, 8, 160);
-}
-
-static void draw_info(tides_sun_state_t *state)
-{
-    char line[32];
-    text_out(TIDES_CONFIG_LOCATION_NAME, 8, 50);
-    _sprintf(line, "%.4f %.4f", TIDES_CONFIG_LATITUDE_DEG,
-             TIDES_CONFIG_LONGITUDE_DEG); text_out(line, 8, 68);
-    _sprintf(line, "UTC %c%02d:%02d",
-        TIDES_CONFIG_UTC_OFFSET_MINUTES < 0 ? '-' : '+',
-        (TIDES_CONFIG_UTC_OFFSET_MINUTES < 0 ? -TIDES_CONFIG_UTC_OFFSET_MINUTES :
-          TIDES_CONFIG_UTC_OFFSET_MINUTES) / 60,
-        (TIDES_CONFIG_UTC_OFFSET_MINUTES < 0 ? -TIDES_CONFIG_UTC_OFFSET_MINUTES :
-          TIDES_CONFIG_UTC_OFFSET_MINUTES) % 60);
-    text_out(line, 8, 86);
-    _sprintf(line, "STA %.14s", TIDES_CONFIG_STATION); text_out(line, 8, 104);
-    if (state->have_tide) {
-        outdoor_date_t expires_date; int expires_minute;
-        _sprintf(line, "SRC %.14s", state->tide_info.source);
-        text_out(line, 8, 122);
-        _sprintf(line, "%.18s", state->tide_info.note);
-        text_out(line, 8, 140);
-        epoch_local(state->tide_info.expires_utc,
-                    state->tide_info.utc_offset_minutes,
-                    &expires_date, &expires_minute);
-        _sprintf(line, "EXP %02d/%02d %02d:%02d", expires_date.month,
-                 expires_date.day, expires_minute/60, expires_minute%60);
-        text_out(line, 8, 158);
+    int offset = TIDES_CONFIG_UTC_OFFSET_MINUTES;
+    int magnitude = offset < 0 ? -offset : offset;
+    set_fg_color(COLOR_WHITE);
+    text_out_center(TIDES_CONFIG_STATION, 88, 50);
+    _sprintf(line, "UTC %c%02d:%02d", offset < 0 ? '-' : '+', magnitude / 60, magnitude % 60);
+    text_out_center(line, 88, 70);
+    if (state->have_tide || state->tide_status == OUTDOOR_TIDE_EXPIRED) {
+        outdoor_date_t date;
+        int minute;
+        _sprintf(line, "%.18s", state->tide_info.source);
+        text_out_center(line, 88, 90);
+        text_out_center("Chart datum", 88, 110);
+        epoch_local(state->tide_info.expires_utc, state->tide_info.utc_offset_minutes, &date, &minute);
+        _sprintf(line, "EXP %02d/%02d %02d:%02d", date.month, date.day, minute / 60, minute % 60);
+        if (state->tide_status == OUTDOOR_TIDE_EXPIRED) set_fg_color(COLOR_YELLOW);
+        text_out_center(line, 88, 131);
     } else {
-        text_out("NO TIDE DATA", 8, 122);
-        text_out("SWIPE LEFT: NEXT", 8, 150);
+        set_fg_color(COLOR_YELLOW);
+        text_out_center("NO TIDE DATA", 88, 109);
     }
 }
 
 static void draw_screen(tides_sun_state_t *state)
 {
-    set_bg_color(COLOR_BLACK); fill_screen_bg();
-    GUI_UC_SetEncodeUTF8(); load_font(); set_fg_color(COLOR_WHITE);
-    draw_header(state->page);
-    if (state->page == PAGE_SUN) draw_sun();
-    else if (state->page == PAGE_TWILIGHT) draw_twilight();
-    else if (state->page == PAGE_TIDES) draw_tides(state);
-    else draw_info(state);
+    static const char *const titles[] = { "TIDES", "SUN", "TWILIGHT", "INFO" };
+    set_bg_color(COLOR_BLACK);
+    fill_screen_bg();
+    GUI_UC_SetEncodeUTF8();
+    load_font();
+    set_fg_color(COLOR_AQUA);
+    if (state->page == PAGE_TIDE_LIST) {
+        text_out_center("TIDE LIST", 88, 6);
+        draw_tide_list(state);
+        return;
+    }
+    text_out_center(titles[state->page], 88, 6);
+    set_fg_color(COLOR_WHITE);
+    text_out_center(TIDES_CONFIG_LOCATION_NAME, 88, 27);
+    if (state->page == PAGE_TIDES) draw_tides(state);
+    else if (state->page == PAGE_INFO) draw_info(state);
+    else draw_solar(state->page);
+    set_fg_color(COLOR_AQUA);
+    if (state->page == PAGE_TIDES) text_out_center("ALL TIDES", 44, 154);
+    if (state->page < PAGE_INFO)
+        text_out_center("NEXT >", state->page == PAGE_TIDES ? 132 : 88, 154);
+    else
+        text_out_center("< PREV", 88, 154);
 }

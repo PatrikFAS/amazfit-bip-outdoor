@@ -1,5 +1,5 @@
 # Upstream components
 
-The generated applications link Maxim Volkov's libbip, Copyright 2019–2021, licensed under Apache License 2.0; see [docs/LICENSE.libbip](docs/LICENSE.libbip). Exact source revisions are in `dependencies.lock`.
+The compiled applications link Maxim Volkov's libbip, Copyright 2019–2021, licensed under Apache 2.0. See [the libbip license](docs/LICENSE.libbip) and `dependencies.lock` for the exact source revision. The app kit also includes notices for the linked compiler runtime and C library.
 
-The BipOS screen lifecycle and build conventions were studied in Maxim Volkov's Template/navigation demo and ngxson's Docker app template. GPS lifecycle and coordinate format follow the navigation demo. The source distribution omits firmware, fonts, resource images, archived app binaries, and CHS tide snapshots. Their own terms apply if you obtain them separately.
+The BipOS screen lifecycle and build conventions draw on Maxim Volkov's Template and navigation demo and ngxson's Docker app template. The installer downloads the matching upstream BipOS base resources, relocation data, and Maxim Volkov's Flashlight app at assembly time. The app kit contains the Bip Outdoor application ELFs.

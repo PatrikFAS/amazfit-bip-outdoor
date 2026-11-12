@@ -48,19 +48,46 @@ int main(void)
     uint8_t damaged[WAYPOINTS_RECORD_SIZE];
 
     waypoints_init(&c);
-    assert(c.occupied_mask == 0 && c.selected == 0 && c.units == NAV_UNITS_METRIC);
+    assert(c.occupied_mask == 0 && c.selected == 0 && c.units == NAV_UNITS_METRIC && c.variation == 0);
     assert(!waypoints_get_selected(&c, &point));
     assert(waypoints_encode(&c, encoded));
     assert(waypoints_decode(encoded, sizeof(encoded), &decoded));
-    assert(decoded.occupied_mask == 0 && decoded.units == NAV_UNITS_METRIC);
+    assert(decoded.occupied_mask == 0 && decoded.units == NAV_UNITS_METRIC && decoded.variation == 0);
+
+    /* Variation is persisted in version 2 without changing the record size. */
+    assert(WAYPOINTS_RECORD_SIZE == 114u);
+    c.variation = -180;
+    assert(waypoints_encode(&c, encoded));
+    assert(encoded[4] == 2);
+    assert(waypoints_decode(encoded, sizeof(encoded), &decoded) && decoded.variation == -180);
+    c.variation = -1;
+    assert(waypoints_encode(&c, encoded));
+    assert(waypoints_decode(encoded, sizeof(encoded), &decoded) && decoded.variation == -1);
+    c.variation = 1;
+    assert(waypoints_encode(&c, encoded));
+    assert(waypoints_decode(encoded, sizeof(encoded), &decoded) && decoded.variation == 1);
+    c.variation = 180;
+    assert(waypoints_encode(&c, encoded));
+    assert(waypoints_decode(encoded, sizeof(encoded), &decoded) && decoded.variation == 180);
+    c.variation = 0;
+
+    /* Version 1 used only the low occupancy and units bits and defaults variation Off. */
+    assert(waypoints_encode(&c, encoded));
+    encoded[4] = 1;
+    encoded[6] &= 0x3f;
+    encoded[7] &= 0x01;
+    refresh_crc(encoded);
+    assert(waypoints_decode(encoded, sizeof(encoded), &decoded));
+    assert(decoded.variation == 0 && decoded.units == NAV_UNITS_METRIC);
 
     assert(waypoints_set(&c, 0, (nav_coordinate_t){49.287, -123.1234567}));
     assert(waypoints_set(&c, 5, (nav_coordinate_t){-33.8568, 151.2153}));
     assert(waypoints_select(&c, 5));
     assert(waypoints_set_units(&c, NAV_UNITS_NAUTICAL));
+    c.variation = -12;
     assert(waypoints_encode(&c, encoded));
     assert(waypoints_decode(encoded, sizeof(encoded), &decoded));
-    assert(decoded.occupied_mask == 0x21 && decoded.selected == 5 && decoded.units == NAV_UNITS_NAUTICAL);
+    assert(decoded.occupied_mask == 0x21 && decoded.selected == 5 && decoded.units == NAV_UNITS_NAUTICAL && decoded.variation == -12);
     assert(waypoints_get_selected(&decoded, &point));
     assert(near(point.latitude_deg, -33.8568) && near(point.longitude_deg, 151.2153));
     assert(!waypoints_select(&decoded, 1));
@@ -75,6 +102,12 @@ int main(void)
         assert(near(decoded.coordinates[i].latitude_deg, c.coordinates[i].latitude_deg));
         assert(near(decoded.coordinates[i].longitude_deg, c.coordinates[i].longitude_deg));
     }
+    /* Version 1 retains all six slots, selection, and nautical units. */
+    memcpy(damaged, encoded, sizeof(damaged));
+    damaged[4] = 1; damaged[6] &= 0x3f; damaged[7] &= 0x01; refresh_crc(damaged);
+    assert(waypoints_decode(damaged, sizeof(damaged), &decoded));
+    assert(decoded.occupied_mask == 0x3f && decoded.selected == 5 &&
+           decoded.units == NAV_UNITS_NAUTICAL && decoded.variation == 0);
 
     assert(waypoints_remove(&decoded, 5));
     assert(decoded.selected == 0 && decoded.occupied_mask == 0x1f);
@@ -86,7 +119,7 @@ int main(void)
     assert(nav_waypoint_encode((nav_coordinate_t){0, 0}, legacy));
     memset(legacy + NAV_WAYPOINT_RECORD_SIZE, 0, sizeof(legacy) - NAV_WAYPOINT_RECORD_SIZE);
     assert(waypoints_decode(legacy, NAV_WAYPOINT_RECORD_SIZE, &decoded));
-    assert(decoded.occupied_mask == 1 && decoded.selected == 0 && decoded.units == NAV_UNITS_METRIC);
+    assert(decoded.occupied_mask == 1 && decoded.selected == 0 && decoded.units == NAV_UNITS_METRIC && decoded.variation == 0);
     assert(waypoints_decode(legacy, sizeof(legacy), &decoded));
     legacy[40] = 1;
     assert(!waypoints_decode(legacy, sizeof(legacy), &decoded));
@@ -110,19 +143,28 @@ int main(void)
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
     memcpy(damaged, encoded, sizeof(damaged)); damaged[0] = 'X'; refresh_crc(damaged);
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
-    memcpy(damaged, encoded, sizeof(damaged)); damaged[4] = 2; refresh_crc(damaged);
+    memcpy(damaged, encoded, sizeof(damaged)); damaged[4] = 3; refresh_crc(damaged);
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
     memcpy(damaged, encoded, sizeof(damaged)); damaged[5] = WAYPOINTS_SLOT_COUNT; refresh_crc(damaged);
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
-    memcpy(damaged, encoded, sizeof(damaged)); damaged[6] = 0x80; refresh_crc(damaged);
+    memcpy(damaged, encoded, sizeof(damaged)); damaged[6] = (uint8_t)((damaged[6] & 0x3f) | 0xc0); damaged[7] = (uint8_t)((damaged[7] & 0x01) | 0xfe); refresh_crc(damaged);
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
-    memcpy(damaged, encoded, sizeof(damaged)); damaged[7] = 2; refresh_crc(damaged);
+    /* Version 1 rejects spare bits and invalid units even with a valid CRC. */
+    memcpy(damaged, encoded, sizeof(damaged)); damaged[4] = 1; damaged[6] |= 0x40; refresh_crc(damaged);
+    assert_decode_rejected_unchanged(damaged, sizeof(damaged));
+    memcpy(damaged, encoded, sizeof(damaged)); damaged[4] = 1; damaged[7] = 2; refresh_crc(damaged);
+    assert_decode_rejected_unchanged(damaged, sizeof(damaged));
+    memcpy(damaged, encoded, sizeof(damaged)); damaged[4] = 3; refresh_crc(damaged);
     assert_decode_rejected_unchanged(damaged, sizeof(damaged));
     assert_decode_rejected_unchanged(encoded, sizeof(encoded) - 1);
 
     assert(!waypoints_set(&c, 6, (nav_coordinate_t){1, 2}));
     assert(!waypoints_set(&c, 2, (nav_coordinate_t){91, 0}));
     assert(!waypoints_set_units(&c, (nav_units_t)2));
+    c.variation = 181;
+    assert(!waypoints_encode(&c, encoded));
+    c.variation = -181;
+    assert(!waypoints_encode(&c, encoded));
     puts("waypoints tests passed");
     return 0;
 }

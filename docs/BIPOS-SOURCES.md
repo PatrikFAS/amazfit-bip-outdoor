@@ -10,4 +10,4 @@
 
 English stock firmware is an alternative if custom apps are abandoned. Our app launcher requires BipOS. A separate open firmware experiment exists at https://github.com/dslul/Amazfitbip-FreeRTOS but its README explicitly says incomplete, not tested on a real device and requiring ST-Link wiring. It is not a practical replacement recommendation.
 
-Recommendation: explicitly English non-Latin 1.1.2.05-based BipOS 0.5.5 build 7 with matching FW/font/RES. No newer matched English BipOS package has been verified by this project; this is not proof none exists. Changing only BipOS launcher language does not add English to the installed Spanish stock firmware base. See [the resource build guide](INSTALL-SUITE.md) once BipOS is installed.
+Recommendation: explicitly English non-Latin 1.1.2.05-based BipOS 0.5.5 build 7 with matching FW/font/RES. No newer matched English BipOS package has been verified by this project; this is not proof none exists. Changing only BipOS launcher language does not add English to the installed Spanish stock firmware base. See INSTALL-ENGLISH.md for the prepared replacement; it still needs separate approval before flashing.

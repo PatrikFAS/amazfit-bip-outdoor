@@ -1,4 +1,5 @@
 #include <libbip.h>
+#include "bip_display.h"
 
 #include <stdint.h>
 
@@ -62,8 +63,7 @@ static void show_screen(void *param)
     }
     poll_compass(state);
     draw_screen(state);
-    set_display_state_value(8, 1);
-    set_display_state_value(2, 1);
+    bip_keep_screen_open();
     set_update_period(1, UPDATE_MS);
 }
 
@@ -86,10 +86,7 @@ static void screen_job(void)
     poll_compass(*slot);
     draw_screen(*slot);
     repaint_screen_lines(0, VIDEO_Y);
-    if ((*slot)->sensor_on) {
-        set_display_state_value(8, 1);
-        set_display_state_value(2, 1);
-    }
+    if ((*slot)->sensor_on) bip_keep_screen_open();
     set_update_period(1, UPDATE_MS);
 }
 
@@ -98,7 +95,6 @@ static int dispatch_screen(void *param)
     compass_state_t **slot = (compass_state_t **)get_ptr_temp_buf_2();
     struct gesture_ *gesture = (struct gesture_ *)param;
     if (!slot || !*slot || !gesture) return 0;
-    if (gesture->gesture == GESTURE_SWIPE_RIGHT) exit_app(*slot);
     return 0;
 }
 
